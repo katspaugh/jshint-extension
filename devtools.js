@@ -1,35 +1,47 @@
-var scripts = [];
+var scripts = [],
+  urls = {},
+  scriptsCount = 0,
+  onScriptsLoad;
 
 chrome.experimental.devtools.resources.onFinished.addListener(function (resource) {
-  if (resource.response.content.mimeType.toLowerCase().indexOf('javascript') >= 0) {
-    var url = resource.request.url;
+  var url = resource.request.url;
 
-    if (scripts.indexOf(url) < 0) {
-      scripts.push(resource.request.url);
-      // chrome.experimental.devtools.log(resource.response.url);
-    }
+  if (urls[url]) {
+    return null;
+  }
+
+  if (resource.response.content.mimeType.toLowerCase().indexOf('javascript') >= 0) {
+    // chrome.experimental.devtools.log(url);
+
+    urls[url] = true;
+
+    scriptsCount++;
+
+    resource.getContent(function (content) {
+      scripts.push({ content: content, url: url });
+
+      if (onScriptsLoad && scriptsCount === scripts.length) {
+        onScriptsLoad();
+      }
+    });
   }
 });
-
-var ERROR_FORMAT = 'Line {{LINE}}: {{REASON}} - {{EVIDENCE}}';
-var MAX_EVIDENCE = 80;
-function formatError(error) {
-  // Get the fragment of evidence near the actual character position
-  var start = error.character - MAX_EVIDENCE/2;
-  var end = error.character + MAX_EVIDENCE/2;
-  var evidence = error.evidence && error.evidence.substring(start, end) || '';
-  return ERROR_FORMAT
-      .replace('{{LINE}}', error.line)
-      .replace('{{REASON}}', error.reason)
-      .replace('{{EVIDENCE}}', evidence)
-      .replace('{{}}', error.a)
-}
 
 var category = chrome.experimental.devtools.audits.addCategory(
     "Javascript Validation", 100);
 
-category.onAuditStarted.addListener(function callback(auditResults) {
-  chrome.extension.sendRequest(scripts, function(response) {
+category.onAuditStarted.addListener(function (auditResults) {
+  if (scriptsCount && scriptsCount === scripts.length) {
+    validate(auditResults);
+  } else {
+    onScriptsLoad = function () {
+      validate(auditResults);
+    };
+  }
+});
+
+function validate(auditResults) {
+  chrome.extension.sendRequest(scripts, function (response) {
     if (response.error) {
       // Something bad happened.
       auditResults.addResult('Unknown error',
@@ -68,4 +80,18 @@ category.onAuditStarted.addListener(function callback(auditResults) {
     }
     auditResults.done();
   });
-});
+}
+
+var ERROR_FORMAT = 'Line {{LINE}}: {{REASON}} - {{EVIDENCE}}';
+var MAX_EVIDENCE = 80;
+function formatError(error) {
+  // Get the fragment of evidence near the actual character position
+  var start = error.character - MAX_EVIDENCE/2;
+  var end = error.character + MAX_EVIDENCE/2;
+  var evidence = error.evidence && error.evidence.substring(start, end) || '';
+  return ERROR_FORMAT
+      .replace('{{LINE}}', error.line)
+      .replace('{{REASON}}', error.reason)
+      .replace('{{EVIDENCE}}', evidence)
+      .replace('{{}}', error.a)
+}
